@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>PokeCards</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{margin:0;font-family:Arial;background:#1c1c1c;color:white}
+header{display:flex;justify-content:space-between;align-items:center;padding:15px;background:#101010}
+h1{color:#ffcb05;font-size:36px;margin:0}
+
+.controls{display:flex;gap:10px}
+select,input{padding:7px 10px;border-radius:6px;border:none;font-size:14px}
+
+#cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;padding:15px}
+
+.card{background:#2a2a2a;border-radius:8px;padding:8px;border:3px solid #444;cursor:pointer;position:relative}
+.card img{width:100%;border-radius:6px}
+.name{font-weight:bold;margin-top:6px}
+
+.price.up{color:#4caf50}
+.price.down{color:#f44336}
+
+/* 🔥 FIRE BADGE */
+.fire{
+position:absolute;top:6px;left:6px;
+background:radial-gradient(circle at 30% 30%,#ffeb3b,#ff5722,#b71c1c);
+color:white;font-weight:bold;
+width:34px;height:34px;border-radius:50%;
+display:flex;align-items:center;justify-content:center;
+animation:flicker .8s infinite alternate;
+}
+@keyframes flicker{
+0%{transform:scale(1)}
+100%{transform:scale(1.15)}
+}
+
+/* ZOOM */
+#zoom{position:fixed;inset:0;background:rgba(0,0,0,.95);display:none;align-items:center;justify-content:center;z-index:1000}
+#zoomBox{display:flex;gap:20px;flex-wrap:wrap;max-width:90%}
+canvas{background:#111;border-radius:10px;padding:10px}
+</style>
+</head>
+
+<body>
+
+<header>
+<h1>PokeCards</h1>
+<div class="controls">
+<select id="order">
+<option value="">Ordenar</option>
+<option value="az">A–Z</option>
+<option value="za">Z–A</option>
+<option value="up">Precio ↑</option>
+<option value="down">Precio ↓</option>
+</select>
+<input id="search" placeholder="Buscar carta">
+<select id="sets"><option>Cargando expansiones…</option></select>
+</div>
+</header>
+
+<div id="cards"></div>
+
+<div id="zoom">
+<div id="zoomBox">
+<img id="zoomImg" style="max-height:85vh;border-radius:8px">
+<canvas id="chart" width="300" height="200"></canvas>
+</div>
+</div>
+
+<script>
+const API="https://pokecards-proxy.onrender.com/api";
+
+const setsSel=document.getElementById("sets");
+const cardsDiv=document.getElementById("cards");
+const search=document.getElementById("search");
+const order=document.getElementById("order");
+
+let allCards=[],chart;
+
+/* SETS */
+fetch(API+"/sets")
+.then(r=>r.json())
+.then(d=>{
+setsSel.innerHTML="<option value=''>Selecciona expansión</option>";
+d.data.sort((a,b)=>new Date(a.releaseDate)-new Date(b.releaseDate))
+.forEach(s=>{
+setsSel.innerHTML+=`<option value="${s.id}">${s.name}</option>`;
+});
+})
+.catch(()=>setsSel.innerHTML="<option>Error cargando expansiones</option>");
+
+/* CARDS */
+setsSel.onchange=async()=>{
+cardsDiv.innerHTML="Cargando cartas…";
+allCards=[];
+let page=1;
+
+while(true){
+const r=await fetch(`${API}/cards?setId=${setsSel.value}&page=${page}`);
+const d=await r.json();
+if(!d.data.length) break;
+allCards.push(...d.data);
+page++;
+}
+render();
+};
+
+/* RENDER */
+function render(){
+cardsDiv.innerHTML="";
+let list=[...allCards];
+
+if(search.value)
+list=list.filter(c=>c.name.toLowerCase().includes(search.value.toLowerCase()));
+
+if(order.value==="az") list.sort((a,b)=>a.name.localeCompare(b.name));
+if(order.value==="za") list.sort((a,b)=>b.name.localeCompare(a.name));
+if(order.value==="up") list.sort((a,b)=>(b.tcgplayer?.prices?.normal?.market||0)-(a.tcgplayer?.prices?.normal?.market||0));
+if(order.value==="down") list.sort((a,b)=>(a.tcgplayer?.prices?.normal?.market||0)-(b.tcgplayer?.prices?.normal?.market||0));
+
+const top=[...list].sort((a,b)=>{
+const pa=a.tcgplayer?.prices?.normal;
+const pb=b.tcgplayer?.prices?.normal;
+return (pb?.market||0)-(pa?.market||0);
+}).slice(0,5).map(c=>c.id);
+
+list.forEach(c=>{
+const p=c.tcgplayer?.prices?.normal;
+const m=p?.market||0,l=p?.low||m;
+const up=m>=l;
+
+const div=document.createElement("div");
+div.className="card";
+div.innerHTML=`
+${top.includes(c.id)?`<div class="fire">${top.indexOf(c.id)+1}</div>`:""}
+<img src="${c.images.small}">
+<div class="name">${c.name}</div>
+<div>${c.rarity||"?"}</div>
+<div class="price ${up?"up":"down"}">
+${m?`${up?"🔺":"🔻"} ${m.toFixed(2)} €`:"Sin precio"}
+</div>
+`;
+div.onclick=()=>zoom(c,p);
+cardsDiv.appendChild(div);
+});
+}
+
+/* ZOOM */
+function zoom(c,p){
+document.getElementById("zoomImg").src=c.images.large;
+document.getElementById("zoom").style.display="flex";
+
+chart&&chart.destroy();
+chart=new Chart(document.getElementById("chart"),{
+type:"line",
+data:{
+labels:["Low","Market","High"],
+datasets:[{data:[p?.low||0,p?.market||0,p?.high||0],borderColor:"#ffcb05"}]
+}
+});
+}
+
+search.oninput=render;
+order.onchange=render;
+document.getElementById("zoom").onclick=e=>{
+if(e.target.id==="zoom") e.target.style.display="none";
+};
+</script>
+
+</body>
+</html>
